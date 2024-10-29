@@ -12,6 +12,7 @@ import threading
 from typing import Optional, List, Tuple, Type
 from datetime import datetime
 import pty
+import glob
 
 # Variables globales
 RESET = "\033[0m"
@@ -250,6 +251,7 @@ def download_server(url: str, output_path: str) -> bool:
         log_message(f"⚠️ Descarga fallida: {str(e)}", RED)
         return False
 
+
 # Tipos de servidores
 def get_vanilla_download_url(version: str) -> Optional[str]:
     manifest_response = requests.get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
@@ -282,7 +284,10 @@ def get_forge_download_url(version: str) -> Optional[str]:
 
             latest_matching_version = max(matching_versions, key=version_key)
             
+            # Descargar el instalador en modo consola
             return f"{forge_base_url}/{latest_matching_version}/forge-{latest_matching_version}-installer.jar"
+    return None
+
 
 def get_paper_download_url(version: str) -> Optional[str]:
     """URL de descarga para PaperMC."""
@@ -442,33 +447,40 @@ def create_new_server() -> Optional[str]:
     log_message(f"✅ Servidor '{server_name}' descargado correctamente!\n", GREEN)
     return server_name
 
+
+# start_server ajustado para varios tipos de servidores
 def start_server(ram, tunnel_process):
     master, slave = pty.openpty()
-    java_command = ["java", "-Xms1G", "-Xmx2G", "-jar", "server.jar", "nogui"]
 
-    java_flags = [
-        "-Xms1G", f"-Xmx{ram}G",
-        "-XX:+UseG1GC",
-        "-XX:+ParallelRefProcEnabled",
-        "-XX:MaxGCPauseMillis=200",
-        "-XX:+UnlockExperimentalVMOptions",
-        "-XX:+DisableExplicitGC",
-        "-XX:+AlwaysPreTouch",
-        "-XX:G1NewSizePercent=30",
-        "-XX:G1MaxNewSizePercent=40",
-        "-XX:G1HeapRegionSize=8M",
-        "-XX:G1ReservePercent=20",
-        "-XX:G1HeapWastePercent=5",
-        "-XX:G1MixedGCCountTarget=4",
-        "-XX:InitiatingHeapOccupancyPercent=15",
-        "-XX:G1MixedGCLiveThresholdPercent=90",
-        "-XX:G1RSetUpdatingPauseTimePercent=5",
-        "-XX:SurvivorRatio=32",
-        "-XX:+PerfDisableSharedMem",
-        "-XX:MaxTenuringThreshold=1"
+    # Buscar automáticamente cualquier archivo .jar de servidor en el directorio actual
+    jar_files = glob.glob("*.jar")
+    if not jar_files:
+        log_message("Error: No se encontró ningún archivo .jar en el directorio para iniciar el servidor.", RED)
+        return
+
+    # Detecta y selecciona el archivo .jar del servidor, considerando Forge y otros tipos
+    server_jar = next((jar for jar in jar_files if "forge" in jar or "server" in jar or "paper" in jar), None)
+    if not server_jar:
+        log_message("Error: No se encontró un archivo .jar compatible para iniciar el servidor.", RED)
+        return
+
+    # Verifica si es un instalador de Forge y ejecuta en modo consola
+    if "installer.jar" in server_jar:
+        install_command = ["java", "-jar", server_jar, "--installServer"]
+        subprocess.run(install_command, check=True)
+        server_jar = "forge-X.X.X.jar"  # Actualiza al archivo .jar resultante de la instalación
+
+    # Configuración del comando para iniciar el servidor con el archivo .jar encontrado
+    java_command = [
+        "java",
+        f"-Xms1G",
+        f"-Xmx{ram}G",
+        "-jar",
+        server_jar,
+        "nogui"
     ]
 
-    # Ejecuta el proceso en el pty para mantener los colores
+    # Ejecuta el proceso en pty para capturar salida con colores originales
     server_process = subprocess.Popen(
         java_command,
         stdout=slave,
@@ -476,13 +488,12 @@ def start_server(ram, tunnel_process):
         bufsize=1,
         universal_newlines=True
     )
-    
+
     os.close(slave)
 
     def monitor_server():
         while True:
             try:
-                # Lee y muestra la salida del proceso con colores originales
                 output = os.read(master, 1024).decode()
                 if output:
                     print(output, end="", flush=True)
@@ -504,6 +515,7 @@ def start_server(ram, tunnel_process):
         if tunnel_process:
             tunnel_process.terminate()
             log_message("🔌 Túnel de servicio detenido", YELLOW)
+
 
 
 def install_and_run_server(server_name: str) -> None:
