@@ -7,6 +7,7 @@ import sys
 import os
 import psutil
 import requests
+import time
 import json
 import threading
 from typing import Optional, List, Tuple, Type
@@ -338,9 +339,10 @@ def get_mohist_download_url(version: str) -> Optional[str]:
     
 def get_purpur_download_url(version: str) -> Optional[str]:
     purpur_api = f"https://api.purpurmc.org/v2/purpur/{version}"
-    response = requests.get(purpur_api).json()
+    response = requests.get(purpur_api)
     if response.status_code == 200:
-        latest_build = response["builds"]["latest"]
+        data = response.json()
+        latest_build = data["builds"]["latest"]
         url = f"https://api.purpurmc.org/v2/purpur/{version}/{latest_build}/download"
         return url
     
@@ -572,6 +574,29 @@ def main():
         install_and_run_server(selected_server)
     else:
         log_message("⚠️ Error al iniciar el servidor", RED)
+
+
+#ACTIVIDAD TEMPORAL PARA EVITAR INACTIVIDAD
+# ACTIVIDAD TEMPORAL PARA EVITAR INACTIVIDAD
+def keep_alive():
+    while True:
+        try:
+            # Realiza una solicitud a una API pública para mantener la actividad
+            response = requests.get("https://jsonplaceholder.typicode.com/todos/1")
+            if response.status_code == 200:
+                log_message("Manteniendo el Codespace activo.", GREEN)
+            else:
+                log_message("Error al mantener el Codespace activo.", RED)
+        except Exception as e:
+            log_message(f"Excepción al mantener el Codespace activo: {e}", RED)
+        
+        # Espera 5 minutos antes de la siguiente solicitud
+        time.sleep(300)
+
+# Inicia el hilo para mantener el Codespace activo
+keep_alive_thread = threading.Thread(target=keep_alive)
+keep_alive_thread.daemon = True
+keep_alive_thread.start()
 
 if __name__ == "__main__":
     try:
