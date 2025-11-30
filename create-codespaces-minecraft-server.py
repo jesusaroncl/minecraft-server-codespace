@@ -1,604 +1,966 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# Paquetes necesarios del sistema
 import subprocess
 import sys
 import os
 import psutil
 import requests
 import time
-import json
 import threading
-from typing import Optional, List, Tuple, Type
+import socket
+from typing import Optional, List
 from datetime import datetime
 import pty
 import glob
+import shutil
+import re
 
-# Variables globales
-RESET = "\033[0m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-BLUE = "\033[94m"
-RED = "\033[91m"
-CYAN = "\033[96m"
-GRAY = "\033[90m"
+# =====================================================
+# CONFIGURACIÓN Y CONSTANTES
+# =====================================================
 
-BASE_DIR = os.path.abspath("Minecraft-servers")
-os.makedirs(BASE_DIR, exist_ok=True)
+class Colors:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    RED = "\033[91m"
+    CYAN = "\033[96m"
+    GRAY = "\033[90m"
+    MAGENTA = "\033[95m"
+    WHITE = "\033[97m"
 
-# Actualiza el sistema y Python
-subprocess.run(["sudo", "apt", "update", "-y"], check=True)
-subprocess.run(["sudo", "apt", "upgrade", "-y"], check=True)
+C = Colors()
 
-# Funciones globales
-def get_lima_time(location: str = "America/Lima"):
-    lima_timezone = pytz.timezone(location)
-    lima_time = datetime.now(lima_timezone)
-    return lima_time.strftime("%H:%M:%S")
+class Config:
+    BASE_DIR = os.path.abspath("Minecraft-servers")
+    MC_PORT = 25565
+    VERSION = "2.3"
+    
+    SERVER_TYPES = {
+        "Vanilla": {"desc": "Minecraft puro", "icon": "🍦", "color": C.GRAY},
+        "Forge": {"desc": "Para mods", "icon": "🔨", "color": C.YELLOW},
+        "Fabric": {"desc": "Mods ligeros", "icon": "🧵", "color": C.GREEN},
+        "Paper": {"desc": "Plugins rápido", "icon": "📄", "color": C.CYAN},
+        "Purpur": {"desc": "Plugins+extras", "icon": "💜", "color": C.MAGENTA},
+        "Mohist": {"desc": "Mods+Plugins", "icon": "🔥", "color": C.RED},
+    }
 
-def log_message(message: str, color: str = RESET, end: str = '\n') -> None:
-    current_time = get_lima_time()
-    print(f"{color}[{current_time}] {message}{RESET}", end=end)
+os.makedirs(Config.BASE_DIR, exist_ok=True)
 
-def log_input(message: str, color: str = RESET) -> str:
-    current_time = get_lima_time()
-    return input(f"{color}[{current_time}] {message}{RESET}")
+# =====================================================
+# UI COMPONENTS
+# =====================================================
 
-# Instalar paquetes necesarios de python
-required_packages = ["python-dotenv", "pytz", "inquirer", "pyngrok"]
-print()
-for package in required_packages:
-    try:
-        __import__(package)
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-        print(f"🔄 Paquete '{package}' instalado con éxito.")
+def strip_ansi(text: str) -> str:
+    """Elimina códigos ANSI para calcular longitud real."""
+    return re.sub(r'\033\[[0-9;]*m', '', text)
 
-# Importar paquetes necesarios instalados
+def pad_ansi(text: str, width: int) -> str:
+    """Padding que considera códigos ANSI."""
+    visible_len = len(strip_ansi(text))
+    padding = width - visible_len
+    return text + " " * max(0, padding)
+
+class UI:
+    BOX_WIDTH = 57
+    
+    @staticmethod
+    def clear():
+        os.system('cls' if os.name == 'nt' else 'clear')
+    
+    @staticmethod
+    def banner():
+        UI.clear()
+        w = UI.BOX_WIDTH
+        print()
+        print(f"  {C.GREEN}╔{'═' * w}╗{C.RESET}")
+        print(f"  {C.GREEN}║{C.RESET}                                                         {C.GREEN}║{C.RESET}")
+        print(f"  {C.GREEN}║{C.RESET}   {C.CYAN}███╗   ███╗{C.RESET} {C.MAGENTA}██████╗{C.RESET}    {C.YELLOW}███████╗███████╗██████╗{C.RESET}    {C.GREEN}║{C.RESET}")
+        print(f"  {C.GREEN}║{C.RESET}   {C.CYAN}████╗ ████║{C.RESET}{C.MAGENTA}██╔════╝{C.RESET}    {C.YELLOW}██╔════╝██╔════╝██╔══██╗{C.RESET}   {C.GREEN}║{C.RESET}")
+        print(f"  {C.GREEN}║{C.RESET}   {C.CYAN}██╔████╔██║{C.RESET}{C.MAGENTA}██║{C.RESET}         {C.YELLOW}███████╗█████╗  ██████╔╝{C.RESET}   {C.GREEN}║{C.RESET}")
+        print(f"  {C.GREEN}║{C.RESET}   {C.CYAN}██║╚██╔╝██║{C.RESET}{C.MAGENTA}██║{C.RESET}         {C.YELLOW}╚════██║██╔══╝  ██╔══██╗{C.RESET}   {C.GREEN}║{C.RESET}")
+        print(f"  {C.GREEN}║{C.RESET}   {C.CYAN}██║ ╚═╝ ██║{C.RESET}{C.MAGENTA}╚██████╗{C.RESET}    {C.YELLOW}███████║███████╗██║  ██║{C.RESET}   {C.GREEN}║{C.RESET}")
+        print(f"  {C.GREEN}║{C.RESET}   {C.CYAN}╚═╝     ╚═╝{C.RESET} {C.MAGENTA}╚═════╝{C.RESET}    {C.YELLOW}╚══════╝╚══════╝╚═╝  ╚═╝{C.RESET}   {C.GREEN}║{C.RESET}")
+        print(f"  {C.GREEN}║{C.RESET}                                                         {C.GREEN}║{C.RESET}")
+        print(f"  {C.GREEN}╠{'═' * w}╣{C.RESET}")
+        title = f"🎮 Minecraft Server Manager v{Config.VERSION}"
+        subtitle = "Optimizado para GitHub Codespaces"
+        print(f"  {C.GREEN}║{C.RESET}   {C.BOLD}{title}{C.RESET}                        {C.GREEN}║{C.RESET}")
+        print(f"  {C.GREEN}║{C.RESET}   {C.DIM}{subtitle}{C.RESET}                   {C.GREEN}║{C.RESET}")
+        print(f"  {C.GREEN}╚{'═' * w}╝{C.RESET}")
+        print()
+
+    @staticmethod
+    def header(title: str, subtitle: str = ""):
+        w = 50
+        print()
+        print(f"  {C.CYAN}┏{'━' * w}┓{C.RESET}")
+        print(f"  {C.CYAN}┃{C.RESET}  {C.BOLD}{pad_ansi(title, w - 3)}{C.RESET}{C.CYAN}┃{C.RESET}")
+        if subtitle:
+            print(f"  {C.CYAN}┃{C.RESET}  {C.DIM}{pad_ansi(subtitle, w - 3)}{C.RESET}{C.CYAN}┃{C.RESET}")
+        print(f"  {C.CYAN}┗{'━' * w}┛{C.RESET}")
+        print()
+
+    @staticmethod
+    def box(lines: List[str], color: str = C.CYAN, width: int = 44):
+        w = width
+        print()
+        print(f"  {color}┌{'─' * w}┐{C.RESET}")
+        for line in lines:
+            padded = pad_ansi(line, w - 2)
+            print(f"  {color}│{C.RESET} {padded}{color}│{C.RESET}")
+        print(f"  {color}└{'─' * w}┘{C.RESET}")
+        print()
+
+    @staticmethod
+    def divider(char: str = "─", width: int = 50):
+        print(f"  {C.DIM}{char * width}{C.RESET}")
+
+    @staticmethod
+    def table_row(cols: List[tuple], widths: List[int]):
+        """Imprime una fila de tabla con columnas alineadas."""
+        row = "  "
+        for i, (text, color) in enumerate(cols):
+            padded = pad_ansi(f"{color}{text}{C.RESET}", widths[i])
+            row += padded
+        print(row)
+
+class Log:
+    @staticmethod
+    def _log(icon: str, msg: str, color: str):
+        print(f"  {color}{icon}{C.RESET} {msg}")
+    
+    @staticmethod
+    def success(msg: str): 
+        Log._log("✓", msg, C.GREEN)
+    
+    @staticmethod
+    def error(msg: str): 
+        Log._log("✗", msg, C.RED)
+    
+    @staticmethod
+    def warn(msg: str): 
+        Log._log("⚠", msg, C.YELLOW)
+    
+    @staticmethod
+    def info(msg: str): 
+        Log._log("●", msg, C.CYAN)
+    
+    @staticmethod
+    def ask(msg: str) -> str:
+        return input(f"  {C.CYAN}›{C.RESET} {msg}")
+
+class Spinner:
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    
+    def __init__(self, msg: str):
+        self.msg = msg
+        self.running = False
+        self.thread = None
+    
+    def __enter__(self):
+        self.start()
+        return self
+    
+    def __exit__(self, *args):
+        self.stop(not any(args))
+    
+    def start(self):
+        self.running = True
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+        self.thread.start()
+    
+    def _spin(self):
+        i = 0
+        while self.running:
+            frame = self.FRAMES[i % len(self.FRAMES)]
+            print(f"\r  {C.YELLOW}{frame}{C.RESET} {self.msg}...", end="", flush=True)
+            time.sleep(0.08)
+            i += 1
+    
+    def stop(self, success: bool = True):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=0.3)
+        icon = f"{C.GREEN}✓{C.RESET}" if success else f"{C.RED}✗{C.RESET}"
+        print(f"\r  {icon} {self.msg}                    ")
+
+class Progress:
+    @staticmethod
+    def bar(current: int, total: int, width: int = 32):
+        if not total:
+            return
+        pct = min(current / total, 1.0)
+        filled = int(width * pct)
+        bar = "█" * filled + "░" * (width - filled)
+        mb = current / 1048576
+        total_mb = total / 1048576
+        print(f"\r  {C.CYAN}│{bar}│{C.RESET} {pct*100:5.1f}% {C.DIM}({mb:.1f}/{total_mb:.1f} MB){C.RESET}", end="", flush=True)
+
+# =====================================================
+# DEPENDENCIAS
+# =====================================================
+
+def ensure_dependencies():
+    pkgs = {"python-dotenv": "dotenv", "pytz": "pytz", "inquirer": "inquirer", "pyngrok": "pyngrok"}
+    for pkg, module in pkgs.items():
+        try:
+            __import__(module)
+        except ImportError:
+            subprocess.run([sys.executable, "-m", "pip", "install", pkg, "-q"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+ensure_dependencies()
+
 import inquirer
-import pytz
 from pyngrok import ngrok, conf
 from dotenv import load_dotenv
-
-# Cargar variables de entorno del archivo '.env'
 load_dotenv()
 
-# application.properties
-def create_server_properties(server_dir: str, server_name: str):
-    properties = {
-        "server-name": server_name,
+# =====================================================
+# UTILIDADES DE RED
+# =====================================================
+
+class Network:
+    _port_released = False
+    
+    @classmethod
+    def is_port_busy(cls, port: int = Config.MC_PORT) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(('localhost', port)) == 0
+    
+    @classmethod
+    def release_port(cls, port: int = Config.MC_PORT):
+        if cls._port_released:
+            return
+        if cls.is_port_busy(port):
+            subprocess.run(f"fuser -k {port}/tcp", shell=True,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            Log.info(f"Puerto {port} liberado")
+        cls._port_released = True
+    
+    @staticmethod
+    def download(url: str, path: str) -> bool:
+        try:
+            r = requests.get(url, stream=True, timeout=120)
+            r.raise_for_status()
+            total = int(r.headers.get('content-length', 0))
+            current = 0
+            
+            with open(path, 'wb') as f:
+                for chunk in r.iter_content(8192):
+                    current += len(chunk)
+                    f.write(chunk)
+                    Progress.bar(current, total)
+            print()
+            return True
+        except Exception as e:
+            Log.error(f"Descarga fallida: {e}")
+            return False
+
+# =====================================================
+# TÚNELES
+# =====================================================
+
+class Tunnel:
+    @staticmethod
+    def _check_cmd(cmd: str) -> bool:
+        return subprocess.run(["which", cmd], 
+                             stdout=subprocess.DEVNULL, 
+                             stderr=subprocess.DEVNULL).returncode == 0
+    
+    @staticmethod
+    def get_available() -> List[str]:
+        tunnels = []
+        
+        # Cloudflare (mejor opción)
+        if Tunnel._check_cmd("cloudflared"):
+            tunnels.append("☁️   Cloudflare Tunnel (Mejor)")
+        else:
+            tunnels.append("☁️   Instalar Cloudflare (Mejor)")
+        
+        # Ngrok
+        if os.getenv("NGROK_AUTH_TOKEN"):
+            tunnels.append("🌐  Ngrok (Estable)")
+        
+        # Playit
+        if Tunnel._check_cmd("playit"):
+            tunnels.append("🎮  Playit.gg")
+        else:
+            Tunnel._install_playit()
+            if Tunnel._check_cmd("playit"):
+                tunnels.append("🎮  Playit.gg")
+        
+        tunnels.append("🔌  Sin túnel (Local)")
+        return tunnels
+    
+    @staticmethod
+    def _install_playit():
+        if Tunnel._check_cmd("playit"):
+            return True
+        
+        with Spinner("Instalando Playit.gg"):
+            try:
+                cmds = [
+                    "curl -SsL https://playit-cloud.github.io/ppa/key.gpg -o /tmp/key.gpg",
+                    "sudo apt-key add /tmp/key.gpg 2>/dev/null",
+                    "echo 'deb https://playit-cloud.github.io/ppa/data ./' | sudo tee /etc/apt/sources.list.d/playit-cloud.list >/dev/null",
+                    "sudo apt update -qq",
+                    "sudo apt install -y playit -qq"
+                ]
+                for cmd in cmds:
+                    subprocess.run(cmd, shell=True, check=True,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except:
+                return False
+    
+    @staticmethod
+    def _install_cloudflare():
+        if Tunnel._check_cmd("cloudflared"):
+            return True
+        
+        with Spinner("Instalando Cloudflare Tunnel"):
+            try:
+                cmds = [
+                    "curl -L --output /tmp/cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb",
+                    "sudo dpkg -i /tmp/cloudflared.deb"
+                ]
+                for cmd in cmds:
+                    subprocess.run(cmd, shell=True, check=True,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except:
+                return False
+    
+    @staticmethod
+    def start(choice: str):
+        Network.release_port()
+        
+        if "Cloudflare" in choice:
+            return Tunnel._start_cloudflare()
+        elif "Ngrok" in choice:
+            return Tunnel._start_ngrok()
+        elif "Playit" in choice:
+            return Tunnel._start_playit()
+        return None
+    
+    @staticmethod
+    def _start_cloudflare():
+        # Instalar si no existe
+        if not Tunnel._check_cmd("cloudflared"):
+            if not Tunnel._install_cloudflare():
+                Log.error("No se pudo instalar Cloudflare")
+                return None
+        
+        try:
+            # Para TCP, cloudflared usa stderr para los logs
+            proc = subprocess.Popen(
+                ["cloudflared", "tunnel", "--url", f"tcp://localhost:{Config.MC_PORT}"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            print()
+            Log.info("Iniciando Cloudflare Tunnel...")
+            Log.info("Buscando dirección del túnel...")
+            print()
+            
+            url_found = [False]  # Usar lista para modificar en closure
+            tunnel_url = [None]
+            
+            def read_stderr():
+                for line in proc.stderr:
+                    # Cloudflare muestra la URL en stderr
+                    if "trycloudflare.com" in line or "cfargotunnel.com" in line:
+                        match = re.search(r'https?://([a-z0-9-]+\.trycloudflare\.com)', line)
+                        if match:
+                            tunnel_url[0] = match.group(1)
+                            url_found[0] = True
+                    # También buscar en formato TCP
+                    if "tcp://" in line.lower() and "trycloudflare" in line:
+                        match = re.search(r'([a-z0-9-]+\.trycloudflare\.com:\d+)', line)
+                        if match:
+                            tunnel_url[0] = match.group(1)
+                            url_found[0] = True
+                    # Imprimir logs relevantes
+                    if "registered" in line.lower() or "connection" in line.lower():
+                        print(f"  {C.DIM}{line.strip()}{C.RESET}")
+            
+            def read_stdout():
+                for line in proc.stdout:
+                    if "trycloudflare.com" in line:
+                        match = re.search(r'([a-z0-9-]+\.trycloudflare\.com)', line)
+                        if match:
+                            tunnel_url[0] = match.group(1)
+                            url_found[0] = True
+            
+            # Leer ambos streams
+            t1 = threading.Thread(target=read_stderr, daemon=True)
+            t2 = threading.Thread(target=read_stdout, daemon=True)
+            t1.start()
+            t2.start()
+            
+            # Esperar hasta 15 segundos por la URL
+            for i in range(30):
+                if url_found[0]:
+                    break
+                time.sleep(0.5)
+                if i % 4 == 0:
+                    print(f"\r  {C.YELLOW}{'.' * ((i//4) % 4 + 1):<4}{C.RESET} Conectando...", end="", flush=True)
+            
+            print("\r" + " " * 30 + "\r", end="")  # Limpiar línea
+            
+            if url_found[0] and tunnel_url[0]:
+                UI.box([
+                    f"{C.BOLD}☁️  Cloudflare Tunnel Activo{C.RESET}",
+                    f"",
+                    f"  Dirección: {C.GREEN}{C.BOLD}{tunnel_url[0]}{C.RESET}",
+                    f"",
+                    f"{C.DIM}  Copia esta dirección en Minecraft{C.RESET}",
+                    f"{C.DIM}  (Añadir servidor → pegar dirección){C.RESET}",
+                ], C.GREEN, 50)
+            else:
+                # Si no encontró URL automáticamente, mostrar alternativa
+                Log.warn("No se detectó la URL automáticamente")
+                print()
+                UI.box([
+                    f"{C.BOLD}☁️  Cloudflare Tunnel Iniciado{C.RESET}",
+                    f"",
+                    f"  {C.YELLOW}Busca la URL en los logs de arriba{C.RESET}",
+                    f"  {C.DIM}Formato: xxx-xxx.trycloudflare.com{C.RESET}",
+                    f"",
+                    f"  {C.DIM}O ejecuta en otra terminal:{C.RESET}",
+                    f"  {C.CYAN}cloudflared tunnel --url tcp://localhost:25565{C.RESET}",
+                ], C.YELLOW, 55)
+            
+            return proc
+            
+        except Exception as e:
+            Log.error(f"Error Cloudflare: {e}")
+            return None
+    
+    @staticmethod
+    def _start_playit():
+        try:
+            proc = subprocess.Popen(
+                ["playit", "run"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True
+            )
+            print()
+            UI.box([
+                f"{C.BOLD}🎮  Playit.gg Activo{C.RESET}",
+                f"",
+                f"{C.DIM}  Ejecuta 'playit' en otra terminal{C.RESET}",
+                f"{C.DIM}  para ver tu dirección IP{C.RESET}",
+            ], C.CYAN, 42)
+            return proc
+        except Exception as e:
+            Log.error(f"Error Playit: {e}")
+            return None
+    
+    @staticmethod
+    def _start_ngrok():
+        try:
+            token = os.getenv("NGROK_AUTH_TOKEN")
+            region = os.getenv("NGROK_REGION", "us")
+            
+            ngrok.set_auth_token(token)
+            conf.get_default().region = region
+            tunnel = ngrok.connect(Config.MC_PORT, "tcp")
+            
+            url = str(tunnel).split('"')[1].replace('tcp://', '')
+            print()
+            UI.box([
+                f"{C.BOLD}🌐  Ngrok Activo{C.RESET}",
+                f"",
+                f"  Dirección: {C.GREEN}{C.BOLD}{url}{C.RESET}",
+                f"",
+                f"{C.DIM}  Copia la dirección en Minecraft{C.RESET}",
+            ], C.GREEN, 48)
+            return tunnel
+        except Exception as e:
+            Log.error(f"Error Ngrok: {e}")
+            return None
+
+# =====================================================
+# SERVIDOR
+# =====================================================
+
+class Server:
+    @staticmethod
+    def get_all() -> List[str]:
+        if not os.path.exists(Config.BASE_DIR):
+            return []
+        return [d for d in os.listdir(Config.BASE_DIR) 
+                if os.path.isdir(os.path.join(Config.BASE_DIR, d))]
+    
+    @staticmethod
+    def get_info(name: str) -> dict:
+        path = os.path.join(Config.BASE_DIR, name)
+        info = {"type": "Vanilla", "mods": 0, "plugins": 0, "world": False}
+        
+        if os.path.exists(os.path.join(path, "run.sh")):
+            info["type"] = "Forge"
+        else:
+            for f in os.listdir(path):
+                if f.endswith(".jar") and "installer" not in f.lower():
+                    fl = f.lower()
+                    for t in Config.SERVER_TYPES:
+                        if t.lower() in fl:
+                            info["type"] = t
+                            break
+                    break
+        
+        mods_path = os.path.join(path, "mods")
+        plugins_path = os.path.join(path, "plugins")
+        
+        if os.path.exists(mods_path):
+            info["mods"] = len([f for f in os.listdir(mods_path) if f.endswith(".jar")])
+        if os.path.exists(plugins_path):
+            info["plugins"] = len([f for f in os.listdir(plugins_path) if f.endswith(".jar")])
+        
+        info["world"] = os.path.exists(os.path.join(path, "world"))
+        return info
+    
+    @staticmethod
+    def display_list() -> List[str]:
+        servers = Server.get_all()
+        if not servers:
+            return servers
+        
+        UI.header("📂 Servidores Disponibles")
+        
+        print(f"  {C.DIM}{'─' * 50}{C.RESET}")
+        
+        for name in servers:
+            info = Server.get_info(name)
+            type_cfg = Config.SERVER_TYPES.get(info["type"], {"icon": "📦", "color": C.GRAY})
+            
+            # Iconos
+            world_icon = "🌍" if info["world"] else "🆕"
+            
+            # Extras
+            extras = []
+            if info["mods"]: 
+                extras.append(f"{info['mods']} mods")
+            if info["plugins"]: 
+                extras.append(f"{info['plugins']} plugins")
+            extra_str = f"{C.DIM}({', '.join(extras)}){C.RESET}" if extras else ""
+            
+            # Formato de tipo
+            type_str = f"{type_cfg['color']}[{type_cfg['icon']} {info['type']:<7}]{C.RESET}"
+            
+            print(f"  {world_icon} {C.BOLD}{name:<16}{C.RESET}  {type_str}  {extra_str}")
+        
+        print(f"  {C.DIM}{'─' * 50}{C.RESET}")
+        print()
+        return servers
+
+# =====================================================
+# VERSIONES Y DESCARGAS
+# =====================================================
+
+class Versions:
+    CACHE = {}
+    
+    @classmethod
+    def get(cls, server_type: str) -> List[str]:
+        if server_type in cls.CACHE:
+            return cls.CACHE[server_type]
+        
+        fetchers = {
+            "Vanilla": cls._minecraft,
+            "Paper": cls._minecraft,
+            "Purpur": cls._minecraft,
+            "Fabric": cls._minecraft,
+            "Forge": cls._forge,
+            "Mohist": cls._mohist,
+        }
+        
+        versions = fetchers.get(server_type, cls._minecraft)()
+        cls.CACHE[server_type] = versions
+        return versions
+    
+    @staticmethod
+    def _minecraft() -> List[str]:
+        try:
+            r = requests.get("https://launchermeta.mojang.com/mc/game/version_manifest.json", timeout=10)
+            return [v["id"] for v in r.json()["versions"] if v["type"] == "release"][:15]
+        except:
+            return ["1.20.4", "1.20.2", "1.20.1", "1.19.4", "1.18.2"]
+    
+    @staticmethod
+    def _forge() -> List[str]:
+        try:
+            r = requests.get("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json", timeout=10)
+            versions = set()
+            for key in r.json().get("promos", {}):
+                v = key.replace("-recommended", "").replace("-latest", "")
+                versions.add(v)
+            return sorted(versions, key=lambda x: [int(n) if n.isdigit() else 0 for n in x.split(".")], reverse=True)[:15]
+        except:
+            return Versions._minecraft()[:10]
+    
+    @staticmethod
+    def _mohist() -> List[str]:
+        try:
+            r = requests.get("https://mohistmc.com/api/v2/projects/mohist", timeout=10)
+            v = r.json().get("versions", [])
+            v.reverse()
+            return v[:15]
+        except:
+            return []
+
+class Downloads:
+    @staticmethod
+    def get_url(server_type: str, version: str) -> Optional[str]:
+        handlers = {
+            "Vanilla": Downloads._vanilla,
+            "Forge": Downloads._forge,
+            "Paper": Downloads._paper,
+            "Fabric": Downloads._fabric,
+            "Mohist": Downloads._mohist,
+            "Purpur": Downloads._purpur,
+        }
+        return handlers.get(server_type, lambda v: None)(version)
+    
+    @staticmethod
+    def _vanilla(version: str) -> Optional[str]:
+        try:
+            r = requests.get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
+            url = next((v["url"] for v in r.json()["versions"] if v["id"] == version), None)
+            return requests.get(url).json()["downloads"]["server"]["url"] if url else None
+        except:
+            return None
+    
+    @staticmethod
+    def _forge(version: str) -> Optional[str]:
+        try:
+            base = "https://maven.minecraftforge.net/net/minecraftforge/forge"
+            r = requests.get(f"{base}/maven-metadata.xml")
+            versions = [v.split('</version>')[0] for v in r.text.split('<version>')[1:]]
+            match = [v for v in versions if v.startswith(version)]
+            if match:
+                latest = max(match, key=lambda v: [int(x) if x.isdigit() else 0 for x in v.replace("-", ".").split(".")])
+                return f"{base}/{latest}/forge-{latest}-installer.jar"
+        except:
+            pass
+        return None
+    
+    @staticmethod
+    def _paper(version: str) -> Optional[str]:
+        try:
+            r = requests.get(f"https://papermc.io/api/v2/projects/paper/versions/{version}")
+            builds = r.json().get('builds', [])
+            if builds:
+                b = builds[-1]
+                return f"https://papermc.io/api/v2/projects/paper/versions/{version}/builds/{b}/downloads/paper-{version}-{b}.jar"
+        except:
+            pass
+        return None
+    
+    @staticmethod
+    def _fabric(version: str) -> Optional[str]:
+        try:
+            loader = requests.get("https://meta.fabricmc.net/v2/versions/loader").json()
+            installer = requests.get("https://meta.fabricmc.net/v2/versions/installer").json()
+            lv = next((v["version"] for v in loader if v.get("stable")), None)
+            iv = next((v["version"] for v in installer if v.get("stable")), None)
+            if lv and iv:
+                return f"https://meta.fabricmc.net/v2/versions/loader/{version}/{lv}/{iv}/server/jar"
+        except:
+            pass
+        return None
+    
+    @staticmethod
+    def _mohist(version: str) -> Optional[str]:
+        try:
+            r = requests.get(f"https://mohistmc.com/api/v2/projects/mohist/{version}/builds")
+            return r.json()["builds"][-1]["url"]
+        except:
+            return None
+    
+    @staticmethod
+    def _purpur(version: str) -> Optional[str]:
+        try:
+            r = requests.get(f"https://api.purpurmc.org/v2/purpur/{version}")
+            b = r.json()["builds"]["latest"]
+            return f"https://api.purpurmc.org/v2/purpur/{version}/{b}/download"
+        except:
+            return None
+
+# =====================================================
+# ACCIONES PRINCIPALES
+# =====================================================
+
+def create_server() -> Optional[str]:
+    UI.header("📦 Crear Nuevo Servidor")
+    
+    name = Log.ask("Nombre del servidor: ").strip()
+    if not name:
+        Log.error("El nombre es requerido")
+        return None
+    
+    if name in Server.get_all():
+        Log.error("Ya existe un servidor con ese nombre")
+        return None
+    
+    print()
+    type_choices = [f"{v['icon']}  {k:<8} │ {v['desc']}" for k, v in Config.SERVER_TYPES.items()]
+    answer = inquirer.prompt([inquirer.List('type', message="Tipo de servidor", choices=type_choices)])
+    if not answer:
+        return None
+    server_type = answer['type'].split()[1]
+    
+    print()
+    with Spinner("Obteniendo versiones disponibles"):
+        versions = Versions.get(server_type)
+    
+    if not versions:
+        Log.error("No se pudieron obtener las versiones")
+        return None
+    
+    answer = inquirer.prompt([inquirer.List('ver', message="Versión de Minecraft", choices=versions)])
+    if not answer:
+        return None
+    version = answer['ver']
+    
+    type_cfg = Config.SERVER_TYPES[server_type]
+    UI.box([
+        f"{C.BOLD}╔══ Resumen de Configuración ══╗{C.RESET}",
+        f"",
+        f"  📛  Nombre:   {C.GREEN}{C.BOLD}{name}{C.RESET}",
+        f"  {type_cfg['icon']}   Tipo:     {type_cfg['color']}{server_type}{C.RESET}",
+        f"  📦  Versión:  {C.BLUE}{version}{C.RESET}",
+        f"",
+    ], width=40)
+    
+    confirm = inquirer.prompt([inquirer.Confirm('ok', message="¿Confirmar creación?", default=True)])
+    if not confirm or not confirm['ok']:
+        Log.warn("Operación cancelada")
+        return None
+    
+    server_dir = os.path.join(Config.BASE_DIR, name)
+    os.makedirs(server_dir, exist_ok=True)
+    
+    url = Downloads.get_url(server_type, version)
+    if not url:
+        Log.error("No se encontró URL de descarga")
+        shutil.rmtree(server_dir)
+        return None
+    
+    print()
+    Log.info(f"Descargando {server_type} {version}...")
+    
+    if server_type == "Forge":
+        installer = os.path.join(server_dir, "installer.jar")
+        if not Network.download(url, installer):
+            shutil.rmtree(server_dir)
+            return None
+        
+        with Spinner("Instalando Forge (esto puede tardar)"):
+            result = subprocess.run(
+                ["java", "-jar", installer, "--installServer"],
+                cwd=server_dir, capture_output=True
+            )
+        
+        if result.returncode != 0:
+            Log.error("Error al instalar Forge")
+            shutil.rmtree(server_dir)
+            return None
+        
+        try:
+            os.remove(installer)
+        except:
+            pass
+    else:
+        if not Network.download(url, os.path.join(server_dir, "server.jar")):
+            shutil.rmtree(server_dir)
+            return None
+    
+    with open(os.path.join(server_dir, 'eula.txt'), 'w') as f:
+        f.write('eula=true\n')
+    
+    props = {
+        "server-name": name,
+        "motd": f"\\u00A7b{name} \\u00A77- \\u00A7aOnline",
         "gamemode": "survival",
         "difficulty": "hard",
         "max-players": "20",
-        "view-distance": "12",
+        "view-distance": "10",
         "spawn-protection": "0",
-        "enable-command-block": "true",
-        "motd": f"Bienvenido a {server_name}!",
-        "online-mode": "false"
+        "online-mode": "false",
+        "enable-command-block": "true"
     }
-    
     with open(os.path.join(server_dir, 'server.properties'), 'w') as f:
-        for key, value in properties.items():
-            f.write(f"{key}={value}\n")
-
-def release_port(port: int = 25565) -> None:
-    try:
-        subprocess.run(f"fuser -k {port}/tcp", 
-                      shell=True, 
-                      stdout=subprocess.PIPE, 
-                      stderr=subprocess.PIPE)
-        log_message(f"🔓 Puerto {port} liberado exitosamente", GRAY, end='\n')
-    except Exception as e:
-        log_message(f"⚠️  No se pudo liberar el puerto {port}: {str(e)}", YELLOW)
-
-class NgrokTunnel():
-    def __init__(self, port: int = 25565):
-        self.port = port
-
-    def start_tunnel(self):
-        auth_token = os.getenv("NGROK_AUTH_TOKEN")
-        region = os.getenv("NGROK_REGION")
-
-        if not auth_token or not region:
-            log_message("⚠️  No se encontró un token de autenticación o una región.", RED)
-            return None
-    
-        log_message("🚀 Iniciando tunel con Ngrok...", CYAN)
-
-        ngrok.set_auth_token(auth_token)
-        conf.get_default().region = region
-
-        url = ngrok.connect(self.port, "tcp")
-        
-        print()
-        log_message("✅ Agente Ngrok conectado exitosamente!", GRAY)
-        
-        # Procesa la URL en pasos separados
-        url_str = str(url)
-        formatted_url = url_str.split('"')[1::2][0].replace('tcp://', '')
-        log_message(f"✨ IP del servidor: {formatted_url}", GREEN)
-
-class PlayitGGTunnel():
-    def __init__(self, port: int = 25565):
-        self.port = port
-
-    def start_tunnel(self):
-        # Libera el puerto antes de usarlo
-        release_port(self.port)
-
-        log_message("🚀 Iniciando tunel con Playit.gg...", CYAN)
-        tunnel_process = subprocess.Popen(
-            ["playit", "run"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-        )
-
-        print()
-        log_message("✅ Agente Playit.gg conectado exitosamente!", GRAY)
-        log_message(f"✨ Inicia un tunel manualmente escribiendo en la terminal 'playit' CUANDO TERMINE DE ABRIR EL SERVIDOR", GREEN)
-
-        def read_output():
-            for line in tunnel_process.stdout:
-                if "agent connected" in line.lower():
-                    log_message("✅ Agente Playit.gg conectado exitosamente!", GREEN)
-                elif "tunnel ready" in line.lower():
-                    address = line.strip().split()[-1]
-                    log_message(f"✨ IP del servidor: {address}", GREEN)
-
-        tunnel_thread = threading.Thread(target=read_output)
-        tunnel_thread.daemon = True
-        tunnel_thread.start()
-        return tunnel_process
-
-def install_playit():
-    subprocess.run(["curl", "-SsL", "https://playit-cloud.github.io/ppa/key.gpg", "-o", "key.gpg"], check=True)
-    
-    subprocess.run(["sudo", "apt-key", "add", "key.gpg"], check=True)
-    
-    subprocess.run(["sudo", "curl", "-SsL", "-o", "/etc/apt/sources.list.d/playit-cloud.list", "https://playit-cloud.github.io/ppa/playit-cloud.list"], check=True)
-
-    result = subprocess.run(["sudo", "apt", "install", "-y", "playit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    
-    if result.returncode == 0:
-        log_message("🔄 Playit instalado correctamente...", BLUE)
-    else:
-        log_message("🔄 Error instalando Playit...", RED)
-
-def get_available_tunnel_services():
-    available_services = []
-
-    install_playit()
-    
-    if subprocess.run(["which", "ngrok"], stdout=subprocess.PIPE).returncode == 0:
-        available_services.append(("Ngrok", NgrokTunnel))
-    
-    if subprocess.run(["which", "playit"], stdout=subprocess.PIPE).returncode == 0:
-        available_services.append(("Playit.gg", PlayitGGTunnel))
-    
-    return available_services
-
-def select_tunnel_service():
-    available_services = get_available_tunnel_services()
-    
-    if not available_services:
-        log_message("⚠️ No se encontraron túneles de conexión integrados, integra uno primero:", YELLOW)
-        log_message("📦 Ngrok (https://ngrok.com)", BLUE)
-        log_message("📦 Playit.gg (https://playit.gg)", BLUE)
-        return None
-
-    questions = [
-        inquirer.List('tunnel_service',
-                     message="Selecciona un túnel de conexión",
-                     choices=[name for name, _ in available_services])
-    ]
-    
-    answer = inquirer.prompt(questions)
-    selected_service = next((service for name, service in available_services 
-                           if name == answer['tunnel_service']), None)
-    
-    return selected_service(25565) if selected_service else None
-
-# Obtiene las versiones de Minecraft desde el manifiesto de versiones oficial de Mojang
-def get_minecraft_versions() -> List[str]:
-    try:
-        response = requests.get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
-        if response.status_code == 200:
-            versions = response.json().get('versions', [])
-            
-            # Filtra solo las versiones "release"
-            release_versions = [v["id"] for v in versions if v["type"] == "release"]
-            
-            return release_versions
-    except Exception as e:
-        log_message(f"Error al obtener las versiones: {e}", RED)
-    
-    # Versiones por defecto si falla la API
-    return ["1.20.4", "1.20.3", "1.20.2", "1.19.4", "1.18.2", "1.18.1", "1.18", "1.17.1", "1.17", "1.16.5", "1.12.2", "1.8.9"]
-
-def get_snapshot_versions() -> List[str]:
-    return None
-
-def get_mohist_versions() -> List[str]:
-    try:
-        response = requests.get("https://mohistmc.com/api/v2/projects/mohist")
-        if response.status_code == 200:
-            data = response.json()
-            data_list = data.get("versions", [])
-            data_list.reverse()
-            return data_list
-        else:
-            raise Exception()
-    except Exception as e:
-        log_message(f"⚠️ Error al obtener la lista de versiones: {str(e)}", RED)
-
-# Descarga el .jar con un indicador de progreso
-def download_server(url: str, output_path: str) -> bool:
-    try:
-        response = requests.get(url, stream=True)
-        total_size = int(response.headers.get('content-length', 0))
-        block_size = 1024
-        current_size = 0
-
-        with open(output_path, 'wb') as f:
-            for data in response.iter_content(block_size):
-                current_size += len(data)
-                f.write(data)
-                
-                if total_size:
-                    percentage = int((current_size / total_size) * 100)
-                    log_message(f"Descargando: {percentage}%", end='\r')
-            
-        return True
-    except Exception as e:
-        log_message(f"⚠️ Descarga fallida: {str(e)}", RED)
-        return False
-
-
-# Tipos de servidores
-def get_vanilla_download_url(version: str) -> Optional[str]:
-    manifest_response = requests.get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
-    if manifest_response.status_code != 200:
-        log_message("Error al obtener el manifiesto de versiones.", RED)
-        return None
-    version_manifest_url = next((v["url"] for v in manifest_response.json()["versions"] if v["id"] == version), None)
-    version_manifest = requests.get(version_manifest_url).json() if version_manifest_url else {}
-    return version_manifest.get("downloads", {}).get("server", {}).get("url")
-    
-# def get_snapshot_download_url(version: str) -> Optional[str]:
-#     return None
-
-def get_forge_download_url(version: str) -> Optional[str]:
-    print(version)
-    forge_base_url = "https://maven.minecraftforge.net/net/minecraftforge/forge"
-    metadata_url = f"{forge_base_url}/maven-metadata.xml"
-
-    response = requests.get(metadata_url)
-    if response.status_code == 200:
-        metadata = response.text
-        versions = metadata.split('<version>')
-        versions = [v.split('</version>')[0] for v in versions[1:]]
-        matching_versions = [v for v in versions if v.startswith(version)]
-
-        if matching_versions:
-            def version_key(v):
-                main_version, sub_version = v.split('-')[0], v.split('-')[1]
-                return [int(x) for x in main_version.split('.')] + [int(x) for x in sub_version.split('.')]
-
-            latest_matching_version = max(matching_versions, key=version_key)
-            
-            # Descargar el instalador en modo consola
-            return f"{forge_base_url}/{latest_matching_version}/forge-{latest_matching_version}-installer.jar"
-    return None
-
-
-def get_paper_download_url(version: str) -> Optional[str]:
-    """URL de descarga para PaperMC."""
-    response = requests.get(f"https://papermc.io/api/v2/projects/paper/versions/{version}")
-    if response.status_code != 200:
-        log_message(f"Error al obtener versión PaperMC {version}.", RED)
-        return None
-    builds = response.json().get('builds', [])
-    latest_build = builds[-1] if builds else None
-
-    if not latest_build:
-        log_message(f"Error obteniendo el link de descarga de PaperMC.", RED)
-        return None
-    
-    url = f"https://papermc.io/api/v2/projects/paper/versions/{version}/builds/{latest_build}/downloads/paper-{version}-{latest_build}.jar"
-    return url
-
-def get_fabric_version(api_url: str) -> Optional[str]:
-    response = requests.get(api_url)
-    if response.status_code == 200:
-        url = next((v["version"] for v in response.json() if v.get("stable")), None)
-        return url
-    return None
-
-def get_fabric_download_url(version: str) -> Optional[str]:
-    """URL de descarga para Fabric."""
-    loader_version = get_fabric_version("https://meta.fabricmc.net/v2/versions/loader")
-    installer_version = get_fabric_version("https://meta.fabricmc.net/v2/versions/installer")
-
-    if not loader_version or not installer_version:
-        log_message(f"Error obteniendo el link de descarga de Fabric.", RED)
-        return None
-
-    url = f"https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{installer_version}/server/jar"
-    return url
-
-def get_mohist_download_url(version: str) -> Optional[str]:
-    mohist_builds_url = f"https://mohistmc.com/api/v2/projects/mohist/{version}/builds"
-    response = requests.get(mohist_builds_url)
-
-    if response.status_code == 200:
-        builds = response.json()["builds"]
-        url = builds[-1]["url"]
-        return url
-    
-    log_message(f"Error obteniendo el link de descarga de Mohist.", RED)
-    return None
-    
-def get_purpur_download_url(version: str) -> Optional[str]:
-    purpur_api = f"https://api.purpurmc.org/v2/purpur/{version}"
-    response = requests.get(purpur_api)
-    if response.status_code == 200:
-        data = response.json()
-        latest_build = data["builds"]["latest"]
-        url = f"https://api.purpurmc.org/v2/purpur/{version}/{latest_build}/download"
-        return url
-    
-    log_message(f"Error obteniendo el link de descarga de Purpur.", RED)
-    return None
-
-def get_server_download_url(server_type: str, version: str) -> Optional[str]:
-    if server_type.lower().startswith('vanilla'):
-        return get_vanilla_download_url(version)
-    # elif server_type.lower().startswith('snapshot'):
-    #     return get_snapshot_download_url(version)
-    elif server_type.lower().startswith('forge'):
-        return get_forge_download_url(version)
-    elif server_type.lower().startswith('paper'):
-        return get_paper_download_url(version)
-    elif server_type.lower().startswith('fabric'):
-        return get_fabric_download_url(version)
-    elif server_type.lower().startswith('mohist'):
-        return get_mohist_download_url(version)
-    elif server_type.lower().startswith('purpur'):
-        return get_purpur_download_url(version)
-    return None
-
-def get_versions_by_type(server_type: str):
-    if server_type.lower().startswith('snapshot'):
-        return get_snapshot_versions()
-    elif server_type.lower().startswith('mohist'):
-        return get_mohist_versions()
-    else:
-        return get_minecraft_versions()
-
-def create_new_server() -> Optional[str]:
-    log_message("🆕 Creando un nuevo servidor...", BLUE)
+        f.writelines(f"{k}={v}\n" for k, v in props.items())
     
     print()
-    server_name = log_input("Ingresa un nombre para el servidor: ").strip()
-    if not server_name:
-        log_message("⚠️ El nombre del servidor es obligatorio!", RED)
-        return None
+    Log.success(f"Servidor '{name}' creado exitosamente!")
+    return name
 
+def delete_server():
+    UI.header("🗑️  Eliminar Servidor")
+    
+    servers = Server.get_all()
+    if not servers:
+        Log.warn("No hay servidores disponibles")
+        return
+    
+    choices = servers + ["", "↩️  Cancelar"]
+    answer = inquirer.prompt([inquirer.List('s', message="Selecciona servidor", choices=choices)])
+    
+    if not answer or answer['s'] == "↩️  Cancelar" or answer['s'] == "":
+        return
+    
+    confirm = inquirer.prompt([
+        inquirer.Confirm('ok', message=f"⚠️  ¿Eliminar '{answer['s']}' permanentemente?", default=False)
+    ])
+    
+    if confirm and confirm['ok']:
+        shutil.rmtree(os.path.join(Config.BASE_DIR, answer['s']))
+        Log.success("Servidor eliminado correctamente")
+
+def run_server(name: str):
+    server_dir = os.path.join(Config.BASE_DIR, name)
+    os.chdir(server_dir)
+    
+    UI.header("🌐 Configurar Túnel")
+    tunnels = Tunnel.get_available()
+    answer = inquirer.prompt([inquirer.List('t', message="Método de conexión", choices=tunnels)])
+    if not answer:
+        return
+    tunnel_proc = Tunnel.start(answer['t'])
+    
+    UI.header("⚡ Iniciar Servidor", name)
+    
+    total_ram = psutil.virtual_memory().total // (1024 ** 3)
+    default_ram = max(2, int(total_ram * 0.75))
+    
+    print(f"  {C.DIM}RAM del sistema: {total_ram}GB{C.RESET}")
+    print(f"  {C.DIM}Recomendado: {default_ram}GB (75%){C.RESET}")
     print()
     
-    # Solicita el tipo de servidor
-    server_type = inquirer.prompt([
-        inquirer.List("type",
-                    message="Selecciona un tipo de servidor", 
-                    choices=[
-                        "Vanilla",
-                        # "Snapshot",
-                        "Forge (mods)",
-                        "Fabric (mods)",
-                        "Mohist (mods y plugins)",
-                        "Purpur (mods y plugins)",
-                        "Paper (plugins)"
-                    ])
-    ])["type"]
-
-    # Obtener la lista de versiones y solicitar la selección
-    versions = get_versions_by_type(server_type)
-    version = inquirer.prompt([
-        inquirer.List("version", 
-                      message="Selecciona una version", 
-                      choices=versions)
-    ])["version"]
-
-    server_type_name = server_type.split('(')[0].strip() if len(server_type.split('(')) > 0 else None
-    log_message(f"📥 Descargando un servidor {server_type_name} en la versión {version}...", CYAN)
-
-    # Busca la version en el tipo de servidor seleccionado
-    url = get_server_download_url(server_type, version)
-
-    if not url:
-        log_message("⚠️ No se encontró la URL de descarga.", RED)
-        return None
-
-    # Crear el directorio del servidor
-    server_dir = os.path.join(BASE_DIR, server_name)
-    os.makedirs(server_dir, exist_ok=True)
-
-    # Descarga y guarda el .jar
-    jar_path = os.path.join(server_dir, "server.jar")
-    if not download_server(url, jar_path):
-        return None
-
-    # Crear archivos de configuración para el servidor
-    config = {
-        "server_type": server_type,
-        "version": version,
-        "created_at": get_lima_time().format(),
-        "last_started": None
-    }
-
-    # # Guardar el archivo de configuración en formato JSON
-    # with open(os.path.join(server_dir, "server_config.json"), 'w') as f:
-        # json.dump(config, f, indent=2)
-
-    # Crear el archivo eula.txt
-    with open(os.path.join(server_dir, 'eula.txt'), 'w') as f:
-        f.write('eula=true\n')
-
-    # Crear el archivo server.properties
-    create_server_properties(server_dir, server_name)
-
-    log_message(f"✅ Servidor '{server_name}' descargado correctamente!\n", GREEN)
-    return server_name
-
-
-# start_server ajustado para varios tipos de servidores
-def start_server(ram, tunnel_process):
+    ram_input = Log.ask(f"RAM a usar [{default_ram}GB]: ").strip()
+    ram = int(ram_input) if ram_input.isdigit() else default_ram
+    
+    print()
+    Log.info(f"Iniciando servidor con {ram}GB de RAM...")
+    UI.divider("─", 50)
+    print()
+    
+    if os.path.exists("run.sh"):
+        with open("user_jvm_args.txt", "w") as f:
+            f.write(f"-Xms{min(2, ram)}G\n-Xmx{ram}G\n")
+        cmd = ["bash", "run.sh", "nogui"]
+    else:
+        jars = [j for j in glob.glob("*.jar") if "installer" not in j.lower()]
+        jar = next((j for j in jars if any(x in j.lower() for x in 
+                   ["server", "paper", "fabric", "mohist", "purpur", "forge"])), 
+                   jars[0] if jars else None)
+        
+        if not jar:
+            Log.error("No se encontró el JAR del servidor")
+            return
+        
+        cmd = ["java", f"-Xms{min(2, ram)}G", f"-Xmx{ram}G", "-jar", jar, "nogui"]
+    
     master, slave = pty.openpty()
-
-    # Buscar automáticamente cualquier archivo .jar de servidor en el directorio actual
-    jar_files = glob.glob("*.jar")
-    if not jar_files:
-        log_message("Error: No se encontró ningún archivo .jar en el directorio para iniciar el servidor.", RED)
-        return
-
-    # Detecta y selecciona el archivo .jar del servidor, considerando Forge y otros tipos
-    server_jar = next((jar for jar in jar_files if "forge" in jar or "server" in jar or "paper" in jar), None)
-    if not server_jar:
-        log_message("Error: No se encontró un archivo .jar compatible para iniciar el servidor.", RED)
-        return
-
-    # Verifica si es un instalador de Forge y ejecuta en modo consola
-    if "installer.jar" in server_jar:
-        install_command = ["java", "-jar", server_jar, "--installServer"]
-        subprocess.run(install_command, check=True)
-        server_jar = "forge-X.X.X.jar"  # Actualiza al archivo .jar resultante de la instalación
-
-    # Configuración del comando para iniciar el servidor con el archivo .jar encontrado
-    java_command = [
-        "java",
-        f"-Xms1G",
-        f"-Xmx{ram}G",
-        "-jar",
-        server_jar,
-        "nogui"
-    ]
-
-    # Ejecuta el proceso en pty para capturar salida con colores originales
-    server_process = subprocess.Popen(
-        java_command,
-        stdout=slave,
-        stderr=slave,
-        bufsize=1,
-        universal_newlines=True
-    )
-
+    proc = subprocess.Popen(cmd, stdout=slave, stderr=slave, universal_newlines=True)
     os.close(slave)
-
-    def monitor_server():
+    
+    def monitor():
         while True:
             try:
-                output = os.read(master, 1024).decode()
-                if output:
-                    print(output, end="", flush=True)
+                data = os.read(master, 4096).decode()
+                if data:
+                    print(data, end="", flush=True)
                 else:
                     break
             except OSError:
                 break
-
-    server_thread = threading.Thread(target=monitor_server)
-    server_thread.daemon = True
-    server_thread.start()
-
+    
+    threading.Thread(target=monitor, daemon=True).start()
+    
     try:
-        server_process.wait()
+        proc.wait()
     except KeyboardInterrupt:
-        log_message("\n🛑 Deteniendo servidor...", YELLOW)
+        print()
+        Log.warn("Deteniendo servidor...")
     finally:
-        os.close(master)
-        if tunnel_process:
-            tunnel_process.terminate()
-            log_message("🔌 Túnel de servicio detenido", YELLOW)
-
-
-
-def install_and_run_server(server_name: str) -> None:
-    server_dir = os.path.join(BASE_DIR, server_name)
-
-    if not os.path.exists(server_dir):
-        log_message(f"⚠️ Directorio del servidor '{server_name}' no encontrado!", RED)
-        return
-
-    # Entrar al directorio creado
-    os.chdir(server_dir)
-
-    # Start tunnel service
-    tunnel_service = select_tunnel_service()
-    tunnel_process = tunnel_service.start_tunnel() if tunnel_service else None
-    
-    # Asignar el 80% de la memoria total si la variable ram es None o no es un entero
-    print()
-    log_message("Si no se ingresa la cantidad de memoria RAM, se asignará el 80% de la memoria total", GRAY)
-    ram = log_input("🔍 Ingresa la cantidad de memoria RAM (en GB) para el servidor: ")
-    if ram is None or ram is not int:
-        total_memory_im_vm = psutil.virtual_memory().total // (1024 ** 3)
-        ram = int(total_memory_im_vm * 0.8)
-
-    start_server(ram, tunnel_process)
-    
-# ACTIVIDAD TEMPORAL PARA EVITAR INACTIVIDAD
-def keep_alive():
-    while True:
         try:
-            # Realiza una solicitud a una API pública para mantener la actividad
-            response = requests.get("https://jsonplaceholder.typicode.com/todos/1")
-            if response.status_code == 200:
-                log_message("Manteniendo el Codespace activo.", GREEN)
-            else:
-                log_message("Error al mantener el Codespace activo.", RED)
-        except Exception as e:
-            log_message(f"Excepción al mantener el Codespace activo: {e}", RED)
-        
-        # Espera 3 horas antes de la siguiente solicitud
-        time.sleep(10800)
+            os.close(master)
+        except:
+            pass
+        if tunnel_proc:
+            tunnel_proc.terminate()
+            Log.info("Túnel cerrado")
 
-# Inicia el hilo para mantener el Codespace activo
-keep_alive_thread = threading.Thread(target=keep_alive)
-keep_alive_thread.daemon = True
-keep_alive_thread.start()
+# =====================================================
+# MAIN
+# =====================================================
 
 def main():
-    print()
-    log_message("=" * 50, BLUE)
-    log_message("🎮 Minecraft Server Manager v2.0", BLUE)
-    log_message("=" * 50, BLUE)
-    print()
-    
-    servers = [d for d in os.listdir(BASE_DIR) 
-              if os.path.isdir(os.path.join(BASE_DIR, d))]
+    UI.banner()
+    servers = Server.display_list()
     
     if servers:
-        choices = servers + ["📦 Crear un nuevo servidor"]
-        selected = inquirer.prompt([
-            inquirer.List("server", 
-                         message="Selecciona un servidor existente", 
-                         choices=choices)
-        ])["server"]
-        
-        if selected == "📦 Crear un nuevo servidor":
-            selected_server = create_new_server()
+        choices = servers + [
+            "",
+            "📦  Crear nuevo servidor",
+            "🗑️   Eliminar servidor",
+            "❌  Salir"
+        ]
+    else:
+        Log.info("No hay servidores. ¡Crea tu primero!")
+        print()
+        choices = [
+            "📦  Crear nuevo servidor",
+            "❌  Salir"
+        ]
+    
+    answer = inquirer.prompt([inquirer.List('a', message="¿Qué deseas hacer?", choices=choices)])
+    
+    if not answer:
+        return
+    
+    action = answer['a']
+    
+    if action == "" or action.startswith("─"):
+        return main()
+    elif action == "❌  Salir":
+        print()
+        Log.info("¡Hasta pronto! 👋")
+    elif action == "📦  Crear nuevo servidor":
+        server = create_server()
+        if server:
+            print()
+            start = inquirer.prompt([inquirer.Confirm('start', message="¿Iniciar servidor ahora?", default=True)])
+            if start and start['start']:
+                run_server(server)
+            else:
+                main()
         else:
-            selected_server = selected
+            main()
+    elif action == "🗑️   Eliminar servidor":
+        delete_server()
+        main()
     else:
-        log_message("No se encontraron servidores en el directorio actual", GRAY)
-        selected_server = create_new_server()
-
-    if selected_server:
-        install_and_run_server(selected_server)
-    else:
-        log_message("⚠️ Error al iniciar el servidor", RED)
+        run_server(action)
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         print()
-        log_message("👋 C:", CYAN)
+        Log.info("¡Hasta pronto! 👋")
+    except Exception as e:
+        Log.error(f"Error inesperado: {e}")
