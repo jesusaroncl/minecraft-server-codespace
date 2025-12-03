@@ -37,7 +37,7 @@ C = Colors()
 
 class Config:
     BASE_DIR = os.path.abspath("Minecraft-servers")
-    MC_PORT = 25565
+    MC_PORT = 9005  # Cambiado de 25565 a 9005
     VERSION = "2.3"
     
     SERVER_TYPES = {
@@ -221,6 +221,31 @@ from pyngrok import ngrok, conf
 from dotenv import load_dotenv
 load_dotenv()
 
+# ===================== Keep-Alive opcional =====================
+# Esta rutina está desactivada por defecto. Para activarla, exporta
+# `KEEP_ALIVE=1` y opcionalmente `KEEP_ALIVE_URL` y
+# `KEEP_ALIVE_INTERVAL_MIN` (intervalo en minutos, por defecto 4).
+def keep_codespace_alive(interval_minutes: int = 4, url: str = "https://www.gstatic.com/generate_204"):
+    """Lanza un hilo daemon que hace peticiones periódicas a `url`.
+
+    Diseñado para generar actividad de red ligera y evitar que algunos
+    entornos cierren la sesión por inactividad. Usa con precaución.
+    """
+    def _ping_loop():
+        while True:
+            try:
+                # Petición muy ligera (204) para minimizar tráfico.
+                requests.get(url, timeout=8)
+                Log.info("Keep-alive: ping enviado")
+            except Exception:
+                # No queremos spam de errores en el log; avisamos de forma leve.
+                Log.warn("Keep-alive: fallo al enviar ping (ignorado)")
+            time.sleep(max(1, interval_minutes) * 60)
+
+    t = threading.Thread(target=_ping_loop, daemon=True)
+    t.start()
+    return t
+
 # =====================================================
 # UTILIDADES DE RED
 # =====================================================
@@ -272,6 +297,33 @@ class Tunnel:
         return subprocess.run(["which", cmd], 
                              stdout=subprocess.DEVNULL, 
                              stderr=subprocess.DEVNULL).returncode == 0
+    
+    @staticmethod
+    def _kill_existing_tunnels():
+        """Mata todos los procesos de túneles existentes para evitar duplicados."""
+        tunnel_processes = ["playit", "cloudflared", "ngrok"]
+        killed = False
+        
+        for proc_name in tunnel_processes:
+            # Verificar si hay procesos corriendo
+            result = subprocess.run(["pgrep", "-f", proc_name], 
+                                   capture_output=True, text=True)
+            if result.returncode == 0:
+                # Matar los procesos
+                subprocess.run(["pkill", "-9", "-f", proc_name],
+                              stdout=subprocess.DEVNULL, 
+                              stderr=subprocess.DEVNULL)
+                killed = True
+        
+        if killed:
+            time.sleep(1)  # Esperar a que se cierren los procesos
+            Log.info("Túneles anteriores cerrados")
+        
+        # También cerrar túneles de ngrok via API
+        try:
+            ngrok.kill()
+        except:
+            pass
     
     @staticmethod
     def get_available() -> List[str]:
@@ -339,6 +391,9 @@ class Tunnel:
     
     @staticmethod
     def start(choice: str):
+        # Primero cerrar cualquier túnel existente para evitar duplicados
+        Tunnel._kill_existing_tunnels()
+        
         Network.release_port()
         
         if "Cloudflare" in choice:
@@ -909,6 +964,16 @@ def run_server(name: str):
 # =====================================================
 
 def main():
+    # Activar keep-alive sólo si la variable de entorno lo indica.
+    if os.getenv("KEEP_ALIVE", "").lower() in ("1", "true", "yes"):
+        url = os.getenv("KEEP_ALIVE_URL", "https://www.gstatic.com/generate_204")
+        try:
+            interval = int(os.getenv("KEEP_ALIVE_INTERVAL_MIN", "50"))
+        except Exception:
+            interval = 4
+        keep_codespace_alive(interval_minutes=interval, url=url)
+        Log.info(f"Keep-alive activado cada {interval} minutos -> {url}")
+
     UI.banner()
     servers = Server.display_list()
     
